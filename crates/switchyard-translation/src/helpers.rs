@@ -745,6 +745,46 @@ mod tests {
     }
 
     #[test]
+    fn cross_format_chat_stream_opens_with_the_assistant_role() -> Result<(), BoxError> {
+        // The production path decodes and encodes with separate states, unlike
+        // `TranslationEngine::translate_event`.
+        let anthropic = [
+            json!({"type": "message_start", "message": {"id": "msg_1", "model": "m"}}),
+            json!({"type": "content_block_start", "index": 0,
+                "content_block": {"type": "text", "text": ""}}),
+            json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": "Hi"}}),
+            json!({"type": "content_block_stop", "index": 0}),
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}}),
+            json!({"type": "message_stop"}),
+        ];
+        let responses = [
+            json!({"type": "response.created", "response": {"id": "resp_1", "model": "m"}}),
+            json!({"type": "response.output_text.delta", "output_index": 0, "delta": "Hi"}),
+            json!({"type": "response.completed",
+                "response": {"id": "resp_1", "model": "m", "status": "completed"}}),
+        ];
+        for (source, events) in [
+            (WireFormat::AnthropicMessages, &anthropic[..]),
+            (WireFormat::OpenAiResponses, &responses[..]),
+        ] {
+            let sse: String = events.iter().map(|e| format!("data: {e}\n\n")).collect();
+            let bytes =
+                stream::once(async move { Ok::<Vec<u8>, LlmClientError>(sse.into_bytes()) });
+            let decoded = decode_stream(bytes, source)?;
+            let chunks =
+                block_on(encode_stream(decoded, WireFormat::OpenAiChat, None)?.collect::<Vec<_>>())
+                    .into_iter()
+                    .collect::<Result<Vec<Value>, LlmStreamError>>()?;
+            assert_eq!(
+                chunks[0]["choices"][0]["delta"]["role"], "assistant",
+                "{source:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn openai_chat_replay_stamps_the_served_model_without_losing_extensions() {
         let mut event = json!({
             "choices": [{"delta": {"content": "Hello"}}],

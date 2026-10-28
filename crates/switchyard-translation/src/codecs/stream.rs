@@ -325,6 +325,8 @@ pub(crate) fn encode_response_stream_event(
     let (preservation, normalized) = event.into_parts();
     if let Some(preservation) = preservation {
         let (source, raw) = preservation.into_parts();
+        // Lets source-gated encoding (the Chat opening role) work when decode used a separate state.
+        state.source.get_or_insert_with(|| source.clone());
         if let Err(error) = super::responses::validate_stream_output(&source, target, &raw) {
             return target_codec.encode_event(
                 state,
